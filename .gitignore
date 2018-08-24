@@ -1,0 +1,9 @@
+go-compilation-output-analyzer
+*.log
+.DS_Store
+tags
+*.dot
+*.svg
+*.png
+.Idea/
+
