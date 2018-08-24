@@ -8,6 +8,7 @@ import (
 	"strings"
 	"regexp"
 	"os/exec"
+	"io/ioutil"
 )
 
 var objects = regexp.MustCompile(`(?m)-o ..((?:\/[\w\.\-]+)+)`)
@@ -22,6 +23,54 @@ type compilationAnalyzer struct {
 	sourcePath string
 
 	File *os.File
+}
+
+func figureOutComponent(input string) string{
+	results := strings.Split(input,"/")
+	return results[0]
+}
+
+func figureOutFunc(input string) string{
+	if !strings.Contains(input,"!_") {
+		tmpFunctionString := strings.Split(input,"/^")[1]
+		tmpFunctionString = strings.Split(tmpFunctionString,"$/")[0]
+		return tmpFunctionString
+	}
+	return ""
+}
+
+func figureOutFilename(input,prefix string) string{
+	if !strings.Contains(input,"!_") {
+		tmpFileString:= strings.Replace(input,prefix,"",-1)
+		tmpFileString = strings.SplitN(tmpFileString,"\t",-1)[1]
+		return tmpFileString
+	}
+	return ""
+}
+
+func (ana compilationAnalyzer) figureOutFunctions(filename string, sourcesFile *os.File) {
+	if _, err := os.Stat(ana.sourcePath+filename); os.IsNotExist(err) {
+		fmt.Println("Failed\n")
+	}
+	cmd := exec.Command("ctags","--c-types=f","--if0=no","-o tmptags", ana.sourcePath+filename)
+	cmd.Run()
+
+	tmpTagsFile,err := os.Open("tmptags")
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+
+	scanner := bufio.NewScanner(tmpTagsFile)
+
+	for scanner.Scan() {
+		tmpString := figureOutFunc(scanner.Text())
+		if tmpString != "" {
+			sourcesFile.WriteString("\t\t" + tmpString + "\n")
+		}
+	}
+
+	os.Remove("tmptags")
 }
 
 func SetupAnalyzer (filename, compiler, linker, fixedPath, sourcePath string) *compilationAnalyzer{
@@ -43,36 +92,55 @@ func SetupAnalyzer (filename, compiler, linker, fixedPath, sourcePath string) *c
 	return ana
 }
 
-func figureOutComponent(input string) string{
-	results := strings.Split(input,"/")
-	return results[0]
+func (ana compilationAnalyzer) CreateCscopeCtagsDB() {
+	scriptFile,_ := os.Create("gen_helper_files.sh")
+	scriptFile.WriteString("find "+strings.Replace(ana.sourcePath," ","\\ ",-1)+" -name \"*.c\" > cscope.files\n")
+	scriptFile.WriteString("ctags -R --c-types=f -o alltags "+strings.Replace(ana.sourcePath," ","\\ ", -1))
+
+	cmd := exec.Command("sh","./gen_helper_files.sh")
+	cmd.Run()
 }
 
-func (ana compilationAnalyzer) figureOutFunctions(filename string, sourcesFile *os.File) {
-	if _, err := os.Stat(ana.sourcePath+filename); os.IsNotExist(err) {
-		fmt.Println("Failed\n")
-	}
-	cmd := exec.Command("ctags","--c-types=f","-o tmptags", ana.sourcePath+filename)
-	cmd.Run()
+func (ana compilationAnalyzer) ProcessTags() {
+	sourcesData,_ := ioutil.ReadFile("sources.txt")
+	file,_ := os.Open("alltags")
+	scanner := bufio.NewScanner(file)
 
-	tmpTagsFile,err := os.Open("tmptags")
-	if err != nil {
-		log.Fatal(err)
-		return
-	}
+	unusedFuncs := 0
+	usedFuncs := 0
+	emptyLines := 0
 
-	scanner := bufio.NewScanner(tmpTagsFile)
+	used,_ := os.Create("usedfuncs.txt")
+	unused,_ := os.Create("unusedfuncs.txt")
+	usedData,_ := ioutil.ReadFile("usedfuncs.txt")
+	unusedData,_ := ioutil.ReadFile("unusedfuncs.txt")
 
 	for scanner.Scan() {
-		if !strings.Contains(scanner.Text(),"!_") {
-			tmpFunctionString := strings.Split(scanner.Text(),"/^")[1]
-			tmpFunctionString = strings.Split(tmpFunctionString,"$/")[0]
-			sourcesFile.WriteString("\t\t"+tmpFunctionString+"\n")
+		fileName := figureOutFilename(scanner.Text(),ana.sourcePath)
+		funcName := figureOutFunc(scanner.Text())
+		if funcName == "" {
+			emptyLines++
+			continue
+		}
+		if strings.Contains(string(sourcesData), funcName) && !strings.Contains(string(usedData), funcName) {
+			usedFuncs++
+			used.WriteString(funcName+"\n");
+			usedData,_ = ioutil.ReadFile("usedfuncs.txt")
+		} else {
+			if !strings.Contains(string(unusedData), funcName) {
+				unusedFuncs++
+				unused.WriteString(fileName + " - \t" + funcName+"\n");
+				unusedData,_ = ioutil.ReadFile("unusedfuncs.txt")
+			}
 		}
 	}
 
-	os.Remove("tmptags")
+	fmt.Println("Used functions:",usedFuncs)
+	fmt.Println("Unused functions:",unusedFuncs)
+	fmt.Println("Empty lines:",emptyLines)
+
 }
+
 
 func (ana compilationAnalyzer) ProcessFileToDot() {
 	outputFile, err := os.Create("Output.dot")
