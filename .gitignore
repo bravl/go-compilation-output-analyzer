@@ -6,4 +6,5 @@ tags
 *.svg
 *.png
 .Idea/
+*.txt
 

@@ -7,24 +7,31 @@ import (
 	"bufio"
 	"strings"
 	"regexp"
+	"os/exec"
 )
+
+var objects = regexp.MustCompile(`(?m)-o ..((?:\/[\w\.\-]+)+)`)
+var sources = regexp.MustCompile(`(?m)-c ..((?:\/[\w\.\-]+)+)`)
+var paths = regexp.MustCompile(`((?:\/[\w\.\-]+)+)`)
 
 type compilationAnalyzer struct {
 	filename string
 	compiler string
 	linker string
 	fixedPathPrefix string
+	sourcePath string
 
 	File *os.File
 }
 
-func SetupAnalyzer (filename, compiler, linker, fixedPath string) *compilationAnalyzer{
+func SetupAnalyzer (filename, compiler, linker, fixedPath, sourcePath string) *compilationAnalyzer{
 	var ana = new(compilationAnalyzer)
 
 	ana.filename = filename
 	ana.compiler = compiler
 	ana.linker = linker
 	ana.fixedPathPrefix = fixedPath
+	ana.sourcePath = sourcePath
 
 	file, err := os.Open(ana.filename)
 	if err != nil {
@@ -36,8 +43,47 @@ func SetupAnalyzer (filename, compiler, linker, fixedPath string) *compilationAn
 	return ana
 }
 
-func (ana compilationAnalyzer) ProcessFile() {
+func figureOutComponent(input string) string{
+	results := strings.Split(input,"/")
+	return results[0]
+}
+
+func (ana compilationAnalyzer) figureOutFunctions(filename string, sourcesFile *os.File) {
+	if _, err := os.Stat(ana.sourcePath+filename); os.IsNotExist(err) {
+		fmt.Println("Failed\n")
+	}
+	cmd := exec.Command("ctags","--c-types=f","-o tmptags", ana.sourcePath+filename)
+	cmd.Run()
+
+	tmpTagsFile,err := os.Open("tmptags")
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+
+	scanner := bufio.NewScanner(tmpTagsFile)
+
+	for scanner.Scan() {
+		if !strings.Contains(scanner.Text(),"!_") {
+			tmpFunctionString := strings.Split(scanner.Text(),"/^")[1]
+			tmpFunctionString = strings.Split(tmpFunctionString,"$/")[0]
+			sourcesFile.WriteString("\t\t"+tmpFunctionString+"\n")
+		}
+	}
+
+	os.Remove("tmptags")
+}
+
+func (ana compilationAnalyzer) ProcessFileToDot() {
 	outputFile, err := os.Create("Output.dot")
+	defer outputFile.Close()
+
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+
+	sourcesFile, err := os.Create("sources.txt")
 	defer outputFile.Close()
 
 	if err != nil {
@@ -48,20 +94,23 @@ func (ana compilationAnalyzer) ProcessFile() {
 	outputFile.WriteString("digraph G {\n")
 
 	fmt.Println("Processing", ana.filename)
-	objects := regexp.MustCompile(`(?m)-o ..((?:\/[\w\.\-]+)+)`)
-	sources := regexp.MustCompile(`(?m)-c ..((?:\/[\w\.\-]+)+)`)
-	//paths := regexp.MustCompile(`..((?:\/[\w\.\-]+)+)`)
-	cd := regexp.MustCompile(`((?:\/[\w\.\-]+)+)`)
 
 	scanner := bufio.NewScanner(ana.File)
 	var prefix string
+	var oldComponent string
 
 	for scanner.Scan() {
 		if text := scanner.Text(); strings.Contains(text, "cd"){
-			prefix = cd.FindAllString(text,-1)[0]
+			prefix = paths.FindAllString(text,-1)[0]
 			tmp := strings.Replace(prefix, ana.fixedPathPrefix,"",-1)
 			tmp = strings.Replace(tmp,"Make","",-1)
 			prefix = tmp
+			component := figureOutComponent(prefix)
+			if component != oldComponent {
+				sourcesFile.WriteString(component + "\n");
+				oldComponent = component
+			}
+
 		}
 
 		if text := scanner.Text(); strings.Contains(text, ana.compiler) {
@@ -69,12 +118,14 @@ func (ana compilationAnalyzer) ProcessFile() {
 			objStr := strings.Split(objsStr[0], " ")[1]
 			objStr = strings.Replace(objStr,"../",prefix,-1)
 
-
-			srcs_str := sources.FindAllString(text, -1)
-			for _, match := range srcs_str {
-				src_str := strings.Split(match, " ")[1]
-				src_str = strings.Replace(src_str,"../",prefix,-1)
-				outputFile.WriteString("\t\"" + src_str + "\" -> \"" + objStr + "\";\n")
+			srcsStr := sources.FindAllString(text, -1)
+			for _, match := range srcsStr {
+				srcStr := strings.Split(match, " ")[1]
+				srcStr = strings.Replace(srcStr,"../",prefix,-1)
+				outputFile.WriteString("\t\"" + srcStr + "\" -> \"" + objStr + "\";\n")
+				tmp := strings.Split(srcStr,"/")
+				sourcesFile.WriteString("\t" + tmp[len(tmp) - 1] + "\n")
+				ana.figureOutFunctions(srcStr,sourcesFile)
 			}
 		}
 
@@ -85,7 +136,7 @@ func (ana compilationAnalyzer) ProcessFile() {
 			objStr = strings.Replace(objStr, ana.fixedPathPrefix,"",-1)
 			objStr = strings.Replace(objStr,"../","",-1)
 
-			pathsStr := cd.FindAllString(text, -1)
+			pathsStr := paths.FindAllString(text, -1)
 			for i, match := range pathsStr {
 				if i == 0 {
 					continue
@@ -99,7 +150,6 @@ func (ana compilationAnalyzer) ProcessFile() {
 						tmp = strings.Replace(tmp,"//","/",-1)
 					}
 				}
-				fmt.Println(tmp)
 
 				outputStr := "\t\"" + tmp + "\" -> \"" + objStr + "\";\n"
 				outputFile.WriteString(outputStr)
