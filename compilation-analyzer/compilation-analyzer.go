@@ -1,61 +1,62 @@
 package compilation_analyzer
 
 import (
-	"log"
-	"fmt"
-	"os"
 	"bufio"
-	"strings"
-	"regexp"
-	"os/exec"
+	"fmt"
 	"io/ioutil"
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
 )
 
-var objects = regexp.MustCompile(`(?m)-o ..((?:\/[\w\.\-]+)+)`)
-var sources = regexp.MustCompile(`(?m)-c ..((?:\/[\w\.\-]+)+)`)
-var paths = regexp.MustCompile(`((?:\/[\w\.\-]+)+)`)
+var objects = regexp.MustCompile(`(?m)-o ..((?:/[\w.\-]+)+)`)
+var sources = regexp.MustCompile(`(?m)-c ..((?:/[\w.\-]+)+)`)
+var paths = regexp.MustCompile(`((?:/[\w.-]+)+)`)
 
 type compilationAnalyzer struct {
-	filename string
-	compiler string
-	linker string
+	filename        string
+	compiler        string
+	linker          string
 	fixedPathPrefix string
-	sourcePath string
+	sourcePath      string
 
 	File *os.File
 }
 
-func figureOutComponent(input string) string{
-	results := strings.Split(input,"/")
+func figureOutComponent(input string) string {
+	results := strings.Split(input, "/")
 	return results[0]
 }
 
-func figureOutFunc(input string) string{
-	if !strings.Contains(input,"!_") {
-		tmpFunctionString := strings.Split(input,"/^")[1]
-		tmpFunctionString = strings.Split(tmpFunctionString,"$/")[0]
+func figureOutFunc(input string) string {
+	if !strings.Contains(input, "!_") {
+		tmpFunctionString := strings.Split(input, "/^")[1]
+		tmpFunctionString = strings.Split(tmpFunctionString, "$/")[0]
 		return tmpFunctionString
 	}
 	return ""
 }
 
-func figureOutFilename(input,prefix string) string{
-	if !strings.Contains(input,"!_") {
-		tmpFileString:= strings.Replace(input,prefix,"",-1)
-		tmpFileString = strings.SplitN(tmpFileString,"\t",-1)[1]
+func figureOutFilename(input, prefix string) string {
+	if !strings.Contains(input, "!_") {
+		tmpFileString := strings.Replace(input, prefix, "", -1)
+		tmpFileString = strings.SplitN(tmpFileString, "\t", -1)[1]
 		return tmpFileString
 	}
 	return ""
 }
 
 func (ana compilationAnalyzer) figureOutFunctions(filename string, sourcesFile *os.File) {
-	if _, err := os.Stat(ana.sourcePath+filename); os.IsNotExist(err) {
-		fmt.Println("Failed\n")
+	if _, err := os.Stat(ana.sourcePath + filename); os.IsNotExist(err) {
+		fmt.Println("No source dir found")
 	}
-	cmd := exec.Command("ctags","--c-types=f","--if0=no","-o tmptags", ana.sourcePath+filename)
+	cmd := exec.Command("ctags", "--c-types=f", "--if0=no", "-o tmptags", ana.sourcePath+filename)
 	cmd.Run()
 
-	tmpTagsFile,err := os.Open("tmptags")
+	tmpTagsFile, err := os.Open("tmptags")
 	if err != nil {
 		log.Fatal(err)
 		return
@@ -73,7 +74,7 @@ func (ana compilationAnalyzer) figureOutFunctions(filename string, sourcesFile *
 	os.Remove("tmptags")
 }
 
-func SetupAnalyzer (filename, compiler, linker, fixedPath, sourcePath string) *compilationAnalyzer{
+func SetupAnalyzer(filename, compiler, linker, fixedPath, sourcePath string) *compilationAnalyzer {
 	var ana = new(compilationAnalyzer)
 
 	ana.filename = filename
@@ -93,30 +94,30 @@ func SetupAnalyzer (filename, compiler, linker, fixedPath, sourcePath string) *c
 }
 
 func (ana compilationAnalyzer) CreateCscopeCtagsDB() {
-	scriptFile,_ := os.Create("gen_helper_files.sh")
-	scriptFile.WriteString("find "+strings.Replace(ana.sourcePath," ","\\ ",-1)+" -name \"*.c\" > cscope.files\n")
-	scriptFile.WriteString("ctags -R --c-types=f -o alltags "+strings.Replace(ana.sourcePath," ","\\ ", -1))
+	scriptFile, _ := os.Create("gen_helper_files.sh")
+	scriptFile.WriteString("find " + strings.Replace(ana.sourcePath, " ", "\\ ", -1) + " -name \"*.c\" > cscope.files\n")
+	scriptFile.WriteString("ctags -R --c-types=f -o alltags " + strings.Replace(ana.sourcePath, " ", "\\ ", -1))
 
-	cmd := exec.Command("sh","./gen_helper_files.sh")
+	cmd := exec.Command("sh", "./gen_helper_files.sh")
 	cmd.Run()
 }
 
 func (ana compilationAnalyzer) ProcessTags() {
-	sourcesData,_ := ioutil.ReadFile("sources.txt")
-	file,_ := os.Open("alltags")
+	sourcesData, _ := ioutil.ReadFile("sources.txt")
+	file, _ := os.Open("alltags")
 	scanner := bufio.NewScanner(file)
 
 	unusedFuncs := 0
 	usedFuncs := 0
 	emptyLines := 0
 
-	used,_ := os.Create("usedfuncs.txt")
-	unused,_ := os.Create("unusedfuncs.txt")
-	usedData,_ := ioutil.ReadFile("usedfuncs.txt")
-	unusedData,_ := ioutil.ReadFile("unusedfuncs.txt")
+	used, _ := os.Create("usedfuncs.txt")
+	unused, _ := os.Create("unusedfuncs.txt")
+	usedData, _ := ioutil.ReadFile("usedfuncs.txt")
+	unusedData, _ := ioutil.ReadFile("unusedfuncs.txt")
 
 	for scanner.Scan() {
-		fileName := figureOutFilename(scanner.Text(),ana.sourcePath)
+		fileName := figureOutFilename(scanner.Text(), ana.sourcePath)
 		funcName := figureOutFunc(scanner.Text())
 		if funcName == "" {
 			emptyLines++
@@ -124,23 +125,30 @@ func (ana compilationAnalyzer) ProcessTags() {
 		}
 		if strings.Contains(string(sourcesData), funcName) && !strings.Contains(string(usedData), funcName) {
 			usedFuncs++
-			used.WriteString(funcName+"\n");
-			usedData,_ = ioutil.ReadFile("usedfuncs.txt")
+			used.WriteString(funcName + "\n")
+			usedData, _ = ioutil.ReadFile("usedfuncs.txt")
 		} else {
 			if !strings.Contains(string(unusedData), funcName) {
 				unusedFuncs++
-				unused.WriteString(fileName + " - \t" + funcName+"\n");
-				unusedData,_ = ioutil.ReadFile("unusedfuncs.txt")
+				unused.WriteString(fileName + " - \t" + funcName + "\n")
+				unusedData, _ = ioutil.ReadFile("unusedfuncs.txt")
 			}
 		}
 	}
 
-	fmt.Println("Used functions:",usedFuncs)
-	fmt.Println("Unused functions:",unusedFuncs)
-	fmt.Println("Empty lines:",emptyLines)
+	fmt.Println("Used functions:", usedFuncs)
+	fmt.Println("Unused functions:", unusedFuncs)
+	fmt.Println("Empty lines:", emptyLines)
 
 }
 
+func copy(src string, dst string) {
+	// Read all content of src to data
+	data, _ := ioutil.ReadFile(src)
+	//log.Fatal(err)
+	// Write data to dst
+	_ = ioutil.WriteFile(dst, data, 0644)
+}
 
 func (ana compilationAnalyzer) ProcessFileToDot() {
 	outputFile, err := os.Create("Output.dot")
@@ -168,15 +176,49 @@ func (ana compilationAnalyzer) ProcessFileToDot() {
 	var oldComponent string
 
 	for scanner.Scan() {
-		if text := scanner.Text(); strings.Contains(text, "cd"){
-			prefix = paths.FindAllString(text,-1)[0]
-			tmp := strings.Replace(prefix, ana.fixedPathPrefix,"",-1)
-			tmp = strings.Replace(tmp,"Make","",-1)
+		if text := scanner.Text(); strings.Contains(text, "cd") {
+			prefix = paths.FindAllString(text, -1)[0]
+			tmp := strings.Replace(prefix, ana.fixedPathPrefix, "", -1)
+			tmp = strings.Replace(tmp, "Make", "", -1)
 			prefix = tmp
 			component := figureOutComponent(prefix)
 			if component != oldComponent {
-				sourcesFile.WriteString(component + "\n");
+				sourcesFile.WriteString(component + "\n")
 				oldComponent = component
+
+				newPath := "../refactored/" + strings.Replace(component, ".CMP", "", -1)
+
+				os.MkdirAll(newPath+"/src", 0777)
+				os.MkdirAll(newPath+"/inc", 0777)
+
+				searchDir := ana.sourcePath + component
+				sourceList := []string{}
+				headerList := []string{}
+
+				_ = filepath.Walk(searchDir, func(path string, info os.FileInfo, err error) error {
+					fileInfo, _ := os.Stat(path)
+					if !fileInfo.IsDir() {
+						if strings.Contains(path, ".c") {
+							sourceList = append(sourceList, path)
+						}
+						if strings.Contains(path, ".h") {
+							headerList = append(headerList, path)
+						}
+					}
+					return nil
+				})
+				for _, file := range sourceList {
+					fmt.Println(file)
+					tmp := strings.Split(file, "/")
+					fmt.Println(tmp[len(tmp)-1])
+					copy(file, newPath+"/src/"+tmp[len(tmp)-1])
+				}
+				for _, file := range headerList {
+					fmt.Println(file)
+					tmp := strings.Split(file, "/")
+					fmt.Println(tmp[len(tmp)-1])
+					copy(file, newPath+"/inc/"+tmp[len(tmp)-1])
+				}
 			}
 
 		}
@@ -184,16 +226,16 @@ func (ana compilationAnalyzer) ProcessFileToDot() {
 		if text := scanner.Text(); strings.Contains(text, ana.compiler) {
 			objsStr := objects.FindAllString(text, 1)
 			objStr := strings.Split(objsStr[0], " ")[1]
-			objStr = strings.Replace(objStr,"../",prefix,-1)
+			objStr = strings.Replace(objStr, "../", prefix, -1)
 
 			srcsStr := sources.FindAllString(text, -1)
 			for _, match := range srcsStr {
 				srcStr := strings.Split(match, " ")[1]
-				srcStr = strings.Replace(srcStr,"../",prefix,-1)
+				srcStr = strings.Replace(srcStr, "../", prefix, -1)
 				outputFile.WriteString("\t\"" + srcStr + "\" -> \"" + objStr + "\";\n")
-				tmp := strings.Split(srcStr,"/")
-				sourcesFile.WriteString("\t" + tmp[len(tmp) - 1] + "\n")
-				ana.figureOutFunctions(srcStr,sourcesFile)
+				tmp := strings.Split(srcStr, "/")
+				sourcesFile.WriteString("\t" + tmp[len(tmp)-1] + "\n")
+				ana.figureOutFunctions(srcStr, sourcesFile)
 			}
 		}
 
@@ -201,8 +243,8 @@ func (ana compilationAnalyzer) ProcessFileToDot() {
 			objsStr := objects.FindAllString(text, 1)
 			objStr := strings.Split(objsStr[0], " ")[1]
 			objStr = prefix + objStr
-			objStr = strings.Replace(objStr, ana.fixedPathPrefix,"",-1)
-			objStr = strings.Replace(objStr,"../","",-1)
+			objStr = strings.Replace(objStr, ana.fixedPathPrefix, "", -1)
+			objStr = strings.Replace(objStr, "../", "", -1)
 
 			pathsStr := paths.FindAllString(text, -1)
 			for i, match := range pathsStr {
@@ -210,12 +252,12 @@ func (ana compilationAnalyzer) ProcessFileToDot() {
 					continue
 				}
 
-				tmp := strings.Replace(match, ana.fixedPathPrefix,"",-1)
+				tmp := strings.Replace(match, ana.fixedPathPrefix, "", -1)
 
-				if !strings.Contains(tmp,prefix) {
+				if !strings.Contains(tmp, prefix) {
 					if !strings.Contains(match, ana.fixedPathPrefix) {
 						tmp = prefix + tmp
-						tmp = strings.Replace(tmp,"//","/",-1)
+						tmp = strings.Replace(tmp, "//", "/", -1)
 					}
 				}
 
